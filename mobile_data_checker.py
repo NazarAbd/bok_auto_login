@@ -210,68 +210,6 @@ def check_device_connection():
         print(f"    ✗ Error checking ADB connection: {e}")
         return False
 
-def check_and_disable_airplane_mode(adb_client, device_serial=None):
-    """
-    Check if airplane mode is ON and disable it if needed.
-    Waits until airplane mode is confirmed OFF.
-    
-    Args:
-        adb_client: AdbClient instance
-        device_serial: Optional device serial number
-    
-    Returns:
-        bool: True if airplane mode is OFF (or successfully disabled), False otherwise
-    """
-    import subprocess
-    import time
-    
-    # Build base command
-    base_cmd = ["adb"]
-    if device_serial:
-        base_cmd.extend(["-s", device_serial])
-    
-    # Check current airplane mode status
-    check_cmd = base_cmd + ["shell", "settings", "get", "global", "airplane_mode_on"]
-    result = subprocess.run(check_cmd, capture_output=True, text=True, timeout=10)
-    airplane_status = result.stdout.strip()
-    
-    print(f"Airplane mode status: {airplane_status} (1=ON, 0=OFF)")
-    
-    # If airplane mode is OFF, return True immediately
-    if airplane_status == "0":
-        print("✓ Airplane mode is already OFF")
-        return True
-    
-    # Airplane mode is ON, disable it
-    print("✗ Airplane mode is ON - Disabling...")
-    
-    # Set airplane mode to 0
-    disable_cmd = base_cmd + ["shell", "settings", "put", "global", "airplane_mode_on", "0"]
-    subprocess.run(disable_cmd, capture_output=True, text=True, timeout=10)
-    
-    # Broadcast the change
-    broadcast_cmd = base_cmd + ["shell", "am", "broadcast", "-a", "android.intent.action.AIRPLANE_MODE", "--ez", "state", "false"]
-    subprocess.run(broadcast_cmd, capture_output=True, text=True, timeout=10)
-    
-    # Wait and verify airplane mode is off
-    max_attempts = 5
-    for attempt in range(max_attempts):
-        time.sleep(2)  # Wait 2 seconds between checks
-        
-        verify_cmd = base_cmd + ["shell", "settings", "get", "global", "airplane_mode_on"]
-        result = subprocess.run(verify_cmd, capture_output=True, text=True, timeout=10)
-        current_status = result.stdout.strip()
-        
-        print(f"  Check {attempt + 1}/{max_attempts}: Airplane mode = {current_status}")
-        
-        if current_status == "0":
-            print("✓ Airplane mode is now OFF")
-            return True
-    
-    print("✗ Failed to disable airplane mode")
-    return False
-    
-
 # ============================================================================
 # MAIN EXECUTION - Call the function at the beginning of your script
 # ============================================================================

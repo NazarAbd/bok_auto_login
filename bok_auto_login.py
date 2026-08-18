@@ -19,12 +19,16 @@ APP_OPEN_WAIT_SECONDS = 5.0
 # Note: ADB input text usually types English correctly even if the visual keyboard is another language.
 FORCE_SWITCH_KEYBOARD_LANGUAGE = True
 
-# check of device internet connection 
-from mobile_data_checker import check_and_enable_mobile_data, check_device_connection, check_and_disable_airplane_mode
+# check of device internet connection
+from mobile_data_checker import check_and_enable_mobile_data, check_device_connection
+from airplane_mode_checker import check_and_disable_airplane_mode
 
 # At the beginning of your script
 
 if check_device_connection():
+    if not check_and_disable_airplane_mode():
+        print("Failed to disable airplane mode")
+        exit(1)
     if check_and_enable_mobile_data():
         print("Mobile data is ready!")
         # Your main script code here
