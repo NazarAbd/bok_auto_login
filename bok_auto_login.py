@@ -4,9 +4,9 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 
+
 from app.adb import AdbClient, AdbError, find_adb
 from app.config import Config
-
 
 # --- CONFIGURATION ---
 PASSWORD_FILE = "password.txt"
@@ -18,6 +18,21 @@ APP_OPEN_WAIT_SECONDS = 5.0
 # Set to False if the language switcher taps the wrong thing.
 # Note: ADB input text usually types English correctly even if the visual keyboard is another language.
 FORCE_SWITCH_KEYBOARD_LANGUAGE = True
+
+# check of device internet connection 
+from mobile_data_checker import check_and_enable_mobile_data, check_device_connection, check_and_disable_airplane_mode
+
+# At the beginning of your script
+
+if check_device_connection():
+    if check_and_enable_mobile_data():
+        print("Mobile data is ready!")
+        # Your main script code here
+    else:
+        print("Failed to establish mobile data connection")
+        exit(1)
+
+
 
 
 def escape_adb_text(text: str) -> str:
