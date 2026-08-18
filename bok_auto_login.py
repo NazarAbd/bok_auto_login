@@ -323,9 +323,23 @@ def detect_and_close_welcome_message(adb: AdbClient):
     if not activity_changed:
         print("WARNING: Timeout waiting for activity to change. Proceeding to check for popup anyway.")
         
-    # Give a brief moment for any popup to render after activity change
-    time.sleep(2.0)
-    
+    # Wait for welcome popup to appear (poll instead of fixed sleep)
+    print("Waiting for welcome popup to render...")
+    popup_keywords = ["ok", "موافق", "حسنا", "تم"]
+
+    def _has_popup(xml_text):
+        root = parse_xml(xml_text)
+        if root is None:
+            return False
+        for node in root.iter("node"):
+            text = node.attrib.get("text", "").strip().lower()
+            content_desc = node.attrib.get("content-desc", "").strip().lower()
+            if text in popup_keywords or content_desc in popup_keywords:
+                return True
+        return False
+
+    popup_found = wait_for_ui_element(adb, _has_popup, timeout=10.0, poll_interval=1.0)
+
     print("Checking for welcome popup message...")
     try:
         xml_text = dump_ui(adb)
@@ -382,6 +396,54 @@ def detect_and_close_welcome_message(adb: AdbClient):
             print("WARNING: Found welcome button but could not calculate its center coordinates.")
     else:
         print("No welcome popup detected.")
+
+
+def wait_for_loading_overlay_to_disappear(adb, timeout=20.0, poll_interval=1.0):
+    """
+    Wait until any loading overlay/spinner on screen disappears.
+    Checks for ProgressBar, CircularProgressIndicator, loading text, and dimmed backgrounds.
+    """
+    loading_classes = ("progressbar", "progressbar", "loading", "spinner")
+    loading_keywords = ("loading", "جاري التحميل", "يرجى الانتظار", "please wait")
+    overlay_package = "android"
+
+    def _no_overlay(xml_text):
+        root = parse_xml(xml_text)
+        if root is None:
+            return True
+
+        for node in root.iter("node"):
+            class_name = node.attrib.get("class", "").lower()
+            text = node.attrib.get("text", "").strip().lower()
+            resource_id = node.attrib.get("resource-id", "").lower()
+            package = node.attrib.get("package", "").lower()
+            visible = node.attrib.get("displayed", "true").lower() == "true"
+
+            if not visible:
+                continue
+
+            if any(kw in class_name for kw in loading_classes):
+                return False
+
+            if any(kw in text for kw in loading_keywords):
+                return False
+
+            if "progress" in resource_id:
+                return False
+
+        return True
+
+    print("    Polling for overlay to disappear...")
+    start = time.time()
+
+    while time.time() - start < timeout:
+        if _no_overlay(dump_ui(adb)):
+            print("    Loading overlay is gone.")
+            return True
+        time.sleep(poll_interval)
+
+    print("    WARNING: Timeout waiting for loading overlay. Proceeding anyway.")
+    return False
 
 
 def read_password() -> str:
@@ -465,6 +527,41 @@ def wait_for_activity_change(adb, old_activity, timeout=25.0, poll_interval=0.5)
         time.sleep(poll_interval)
 
     return current
+
+
+def wait_for_activity_to_load(adb, expected_activity, timeout=15.0, poll_interval=0.5):
+    """
+    Wait until a specific activity appears in the foreground.
+    Used after launching an app -- polls until the expected activity is detected.
+    """
+    start = time.time()
+
+    while time.time() - start < timeout:
+        current = get_current_activity(adb)
+        if current and expected_activity in current:
+            return True
+        time.sleep(poll_interval)
+
+    return False
+
+
+def wait_for_ui_element(adb, element_finder, timeout=10.0, poll_interval=0.5):
+    """
+    Wait until a UI element appears on screen.
+    element_finder: callable that returns truthy if the element is found.
+    """
+    start = time.time()
+
+    while time.time() - start < timeout:
+        try:
+            xml_text = dump_ui(adb)
+            if element_finder(xml_text):
+                return True
+        except AdbError:
+            pass
+        time.sleep(poll_interval)
+
+    return False
 
 
 def normalize_text(value):
@@ -755,9 +852,12 @@ def run_auto_login():
         print(f"FATAL: Failed to launch Bok app: {exc}")
         sys.exit(1)
 
-    # 2. IMPORTANT: Wait exactly 5 seconds before looking for the password field.
-    print(f"Waiting exactly {APP_OPEN_WAIT_SECONDS} seconds for app to fully open...")
-    time.sleep(APP_OPEN_WAIT_SECONDS)
+    # 2. Wait for the app activity to appear (instead of fixed 5s sleep).
+    print(f"Waiting for {APP_PACKAGE} activity to load...")
+    activity_loaded = wait_for_activity_to_load(adb, APP_PACKAGE, timeout=15.0, poll_interval=0.5)
+
+    if not activity_loaded:
+        print(f"WARNING: {APP_PACKAGE} activity not detected. Proceeding anyway...")
 
     # 3. Now it is safe to search for the password field.
     print("Searching for password field...")
@@ -796,8 +896,25 @@ def run_auto_login():
     print(f"Found password field. Tapping at {x},{y}...")
     adb.run(["shell", "input", "tap", str(x), str(y)], timeout=5)
 
-    # Wait for keyboard to appear.
-    time.sleep(1.5)
+    # Wait for keyboard to appear (poll instead of fixed sleep).
+    print("Waiting for keyboard to appear...")
+
+    def _keyboard_visible(xml_text):
+        root = parse_xml(xml_text)
+        if root is None:
+            return False
+        keyboard_packages = ("inputmethod", "keyboard", "latin", "gboard", "swiftkey",
+                             "facemoji", "miui.inputmethod")
+        for node in root.iter("node"):
+            pkg = node.attrib.get("package", "").lower()
+            if any(kw in pkg for kw in keyboard_packages):
+                return True
+        return False
+
+    keyboard_appeared = wait_for_ui_element(adb, _keyboard_visible, timeout=5.0, poll_interval=0.5)
+
+    if not keyboard_appeared:
+        print("WARNING: Keyboard not detected. Proceeding to check language anyway...")
 
     # 4. Check keyboard language.
     try:
@@ -819,8 +936,12 @@ def run_auto_login():
         print(f"FATAL: Failed to type password: {exc}")
         sys.exit(1)
 
-    # Small pause before pressing Login.
-    time.sleep(1.0)
+    # Wait for UI to stabilize after text input (instead of fixed sleep).
+    print("Waiting for text input to settle...")
+    password_stable = wait_for_ui_element(adb, lambda xml: find_password_field(xml)[0] is not None, timeout=3.0, poll_interval=0.5)
+
+    if not password_stable:
+        print("WARNING: Password field not detected after typing. Proceeding anyway...")
 
     # 6. Find Login button.
     print("Searching for Login button...")
@@ -862,6 +983,10 @@ def run_auto_login():
     # The safeguard against double-tapping LOGIN is still intact because we don't tap login again.
     print("Login tap sent. Waiting for next screen and checking for welcome popup...")
     detect_and_close_welcome_message(adb)
+
+    # 8. Wait for loading overlay to disappear before proceeding to home screen.
+    print("Waiting for loading overlay to disappear...")
+    wait_for_loading_overlay_to_disappear(adb)
 
       # Wait for Account Summary button, tap it once, then wait for activity change.
     press_account_summary_and_wait(adb)
