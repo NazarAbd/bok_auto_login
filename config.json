@@ -1,0 +1,37 @@
+{
+  "adb_path": "H:/project/scrcpy-win64-v4.1/adb.exe",
+  "scrcpy_path": "H:/project/scrcpy-win64-v4.1/scrcpy.exe",
+  "photo_dir": "photos",
+  "log_dir": "logs",
+  "auto_start_scrcpy": true,
+  "debug": false,
+  "timeouts": {
+    "adb": 10,
+    "device_check": 10,
+    "camera_launch": 15.0,
+    "ui_ready": 15.0,
+    "capture": 10,
+    "file_verify": 10.0,
+    "pull": 120.0,
+    "scrcpy_start": 10
+  },
+  "camera": {
+    "package": "",
+    "activity": "",
+    "strict_single_photo": true,
+    "poll_interval": 1.0,
+    "fallback_shutter": {
+      "enabled": true,
+      "use_if_ui_not_found": true,
+      "reference_width": 1080,
+      "reference_height": 2400,
+      "shutter_x": 540.0,
+      "shutter_y": 2200.0
+    }
+  },
+  "scrcpy": {
+    "max_size": 1280,
+    "window_title": "Redmi Note 13 Pro",
+    "extra_args": []
+  }
+}
