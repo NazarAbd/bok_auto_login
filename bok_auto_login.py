@@ -291,99 +291,54 @@ def find_login_button(xml_root):
 
 def detect_and_close_welcome_message(adb: AdbClient):
     """
-    Wait until the login activity changes to a different activity,
-    then detect if there's a popup message and press the confirmation button.
+    Immediately after login, check once for a welcome popup message.
+    If found, press the confirmation button. No waiting.
     """
-    print("Waiting for activity to change after login...")
-    
-    # We wait until the password field and login button disappear, 
-    # which reliably indicates the activity has transitioned to the dashboard/home screen.
-    max_wait_seconds = 15
-    start_time = time.time()
-    activity_changed = False
-    
-    while time.time() - start_time < max_wait_seconds:
-        try:
-            xml_text = dump_ui(adb)
-            xml_root = parse_xml(xml_text)
-            
-            password_node, _ = find_password_field(xml_text)
-            login_node = find_login_button(xml_root)
-            
-            if password_node is None and login_node is None:
-                print("Login screen elements are gone. Activity has likely changed.")
-                activity_changed = True
-                break
-                
-        except AdbError as exc:
-            print(f"WARNING: UI dump failed while waiting for activity change: {exc}")
-            
-        time.sleep(1.0)
-        
-    if not activity_changed:
-        print("WARNING: Timeout waiting for activity to change. Proceeding to check for popup anyway.")
-        
-    # Wait for welcome popup to appear (poll instead of fixed sleep)
-    print("Waiting for welcome popup to render...")
-    popup_keywords = ["ok", "موافق", "حسنا", "تم"]
-
-    def _has_popup(xml_text):
-        root = parse_xml(xml_text)
-        if root is None:
-            return False
-        for node in root.iter("node"):
-            text = node.attrib.get("text", "").strip().lower()
-            content_desc = node.attrib.get("content-desc", "").strip().lower()
-            if text in popup_keywords or content_desc in popup_keywords:
-                return True
-        return False
-
-    popup_found = wait_for_ui_element(adb, _has_popup, timeout=10.0, poll_interval=1.0)
-
     print("Checking for welcome popup message...")
+
     try:
         xml_text = dump_ui(adb)
         xml_root = parse_xml(xml_text)
     except AdbError as exc:
         print(f"WARNING: Could not dump UI to check for welcome popup: {exc}")
         return
-        
+
     if xml_root is None:
         print("WARNING: Could not parse UI XML for welcome popup.")
         return
-        
+
     # Keywords to look for in the popup button
     keywords = ["ok", "موافق", "حسنا", "تم"]
-    
+
     best_node = None
     best_score = 0
-    
+
     for node in xml_root.iter("node"):
         attrs = node.attrib
-        
+
         # Normalize text and content-desc (strip whitespace and lowercase English)
         text = attrs.get("text", "").strip().lower()
         content_desc = attrs.get("content-desc", "").strip().lower()
         class_name = attrs.get("class", "").lower()
-        
+
         score = 0
-        
+
         # Exact match for the keywords is safer to avoid clicking random things
         if text in keywords or content_desc in keywords:
             score += 100
-            
+
         # Bonus if it's explicitly a button class
         if "button" in class_name and score > 0:
             score += 20
-            
+
         if score > best_score:
             best_score = score
             best_node = node
-            
+
     if best_node is not None and best_score >= 100:
         bounds = best_node.attrib.get("bounds", "")
         x, y = get_center_from_bounds(bounds)
-        
+
         if x is not None and y is not None:
             original_text = best_node.attrib.get("text", "") or best_node.attrib.get("content-desc", "")
             print(f"Welcome popup detected! Found button with text '{original_text}'. Tapping at {x},{y}...")
@@ -396,54 +351,6 @@ def detect_and_close_welcome_message(adb: AdbClient):
             print("WARNING: Found welcome button but could not calculate its center coordinates.")
     else:
         print("No welcome popup detected.")
-
-
-def wait_for_loading_overlay_to_disappear(adb, timeout=20.0, poll_interval=1.0):
-    """
-    Wait until any loading overlay/spinner on screen disappears.
-    Checks for ProgressBar, CircularProgressIndicator, loading text, and dimmed backgrounds.
-    """
-    loading_classes = ("progressbar", "progressbar", "loading", "spinner")
-    loading_keywords = ("loading", "جاري التحميل", "يرجى الانتظار", "please wait")
-    overlay_package = "android"
-
-    def _no_overlay(xml_text):
-        root = parse_xml(xml_text)
-        if root is None:
-            return True
-
-        for node in root.iter("node"):
-            class_name = node.attrib.get("class", "").lower()
-            text = node.attrib.get("text", "").strip().lower()
-            resource_id = node.attrib.get("resource-id", "").lower()
-            package = node.attrib.get("package", "").lower()
-            visible = node.attrib.get("displayed", "true").lower() == "true"
-
-            if not visible:
-                continue
-
-            if any(kw in class_name for kw in loading_classes):
-                return False
-
-            if any(kw in text for kw in loading_keywords):
-                return False
-
-            if "progress" in resource_id:
-                return False
-
-        return True
-
-    print("    Polling for overlay to disappear...")
-    start = time.time()
-
-    while time.time() - start < timeout:
-        if _no_overlay(dump_ui(adb)):
-            print("    Loading overlay is gone.")
-            return True
-        time.sleep(poll_interval)
-
-    print("    WARNING: Timeout waiting for loading overlay. Proceeding anyway.")
-    return False
 
 
 def read_password() -> str:
@@ -810,6 +717,270 @@ def press_account_summary_and_wait(adb, find_timeout=25.0, activity_timeout=25.0
     print("WARNING: Account Summary button did not disappear.")
     return False
 
+
+def find_view_statement_button(xml_root):
+    """
+    Find the View Statement / عرض تفاصيل الحساب button.
+    """
+    if xml_root is None:
+        return None
+
+    english_target = normalize_text("View Statement")
+    arabic_target = normalize_text("عرض تفاصيل الحساب")
+    arabic_target_double = normalize_text("عرض تفاصيل  الحساب")
+
+    exact_targets = {
+        english_target,
+        arabic_target,
+        arabic_target_double,
+    }
+
+    best_score = 0
+    best_node = None
+
+    for node in xml_root.iter("node"):
+        attrs = node.attrib
+
+        text = normalize_text(attrs.get("text", ""))
+        desc = normalize_text(attrs.get("content-desc", ""))
+        resource_id = normalize_text(attrs.get("resource-id", "")).replace(" ", "")
+        class_name = attrs.get("class", "").lower()
+
+        clickable = attrs.get("clickable", "false").lower() == "true"
+        enabled = attrs.get("enabled", "false").lower() == "true"
+
+        score = 0
+        matched = None
+
+        # Exact match is strongest.
+        if text in exact_targets:
+            score = 100
+            matched = text
+
+        elif desc in exact_targets:
+            score = 100
+            matched = desc
+
+        else:
+            # Partial match fallback.
+            for target in exact_targets:
+                if target and (target in text or target in desc):
+                    score = 85
+                    matched = text if target in text else desc
+                    break
+
+            # Loose Arabic fallback: the button is the Arabic translation of
+            # "view account details", so any node whose text contains both
+            # "عرض" (view) and "حساب" (account) is a strong candidate.
+            if score == 0:
+                combined = text + " " + desc
+                if "عرض" in combined and "حساب" in combined:
+                    score = 80
+                    matched = combined
+
+        if score < 80:
+            continue
+
+        # Helpful resource-id hints.
+        if "viewstatement" in resource_id or "view_statement" in resource_id:
+            score += 30
+
+        # Clickable/enabled/button-like nodes are better.
+        if clickable:
+            score += 25
+
+        if enabled:
+            score += 10
+
+        if "button" in class_name:
+            score += 15
+
+        if score > best_score:
+            best_score = score
+            best_node = node
+
+    return best_node
+
+
+def press_view_statement_once(adb, find_timeout=15.0):
+    """
+    After Account Summary opens, wait for the View Statement / عرض تفاصيل الحساب
+    button, then tap it exactly once.
+    """
+    print("Looking for View Statement button...")
+
+    start = time.time()
+    button_node = None
+
+    while time.time() - start < find_timeout:
+        try:
+            xml_text = dump_ui(adb)
+            xml_root = parse_xml(xml_text)
+
+            button_node = find_view_statement_button(xml_root)
+
+            if button_node is not None:
+                break
+
+        except AdbError as exc:
+            print(f"WARNING: UI dump failed while looking for View Statement: {exc}")
+
+        time.sleep(1.0)
+
+    if button_node is None:
+        print("FATAL: View Statement / عرض تفاصيل الحساب button was not found.")
+        print("Aborting the simulation.")
+        sys.exit(1)
+
+    bounds = button_node.attrib.get("bounds", "")
+    x, y = get_center_from_bounds(bounds)
+
+    if x is None or y is None:
+        print("FATAL: Found View Statement button but could not read its bounds.")
+        print("Aborting the simulation.")
+        sys.exit(1)
+
+    visible_text = button_node.attrib.get("text", "") or button_node.attrib.get("content-desc", "")
+    resource_id = button_node.attrib.get("resource-id", "")
+
+    print(f"Found View Statement button: text='{visible_text}' id='{resource_id}' bounds='{bounds}'")
+    print(f"Tapping View Statement EXACTLY ONCE at {x},{y}...")
+
+    try:
+        adb.run(["shell", "input", "tap", str(x), str(y)], timeout=5)
+        print("View Statement tapped once.")
+        return True
+    except AdbError as exc:
+        print(f"FATAL: Failed to tap View Statement button: {exc}")
+        print("Aborting the simulation.")
+        sys.exit(1)
+
+
+def find_last_7_days_button(xml_root):
+    """
+    Find the Last 7 Days / آخر 7 أيام button.
+    """
+    if xml_root is None:
+        return None
+
+    english_target = normalize_text("Last 7 Days")
+    arabic_target = normalize_text("آخر 7 أيام")
+    arabic_target_double = normalize_text("آخر  7 أيام")
+
+    exact_targets = {
+        english_target,
+        arabic_target,
+        arabic_target_double,
+    }
+
+    best_score = 0
+    best_node = None
+
+    for node in xml_root.iter("node"):
+        attrs = node.attrib
+
+        text = normalize_text(attrs.get("text", ""))
+        desc = normalize_text(attrs.get("content-desc", ""))
+        resource_id = normalize_text(attrs.get("resource-id", "")).replace(" ", "")
+        class_name = attrs.get("class", "").lower()
+
+        clickable = attrs.get("clickable", "false").lower() == "true"
+        enabled = attrs.get("enabled", "false").lower() == "true"
+
+        score = 0
+        matched = None
+
+        # Exact match is strongest.
+        if text in exact_targets:
+            score = 100
+            matched = text
+
+        elif desc in exact_targets:
+            score = 100
+            matched = desc
+
+        else:
+            # Partial match fallback.
+            for target in exact_targets:
+                if target and (target in text or target in desc):
+                    score = 85
+                    matched = text if target in text else desc
+                    break
+
+        if score < 85:
+            continue
+
+        # Helpful resource-id hints.
+        if "last7days" in resource_id or "last_7_days" in resource_id:
+            score += 30
+
+        # Clickable/enabled/button-like nodes are better.
+        if clickable:
+            score += 25
+
+        if enabled:
+            score += 10
+
+        if "button" in class_name:
+            score += 15
+
+        if score > best_score:
+            best_score = score
+            best_node = node
+
+    return best_node
+
+
+def press_last_7_days_once(adb, find_timeout=15.0):
+    """
+    Wait for the statement screen to open, find the Last 7 Days / آخر 7 أيام
+    button, then tap it exactly once.
+    """
+    print("Looking for Last 7 Days button...")
+
+    start = time.time()
+    button_node = None
+
+    while time.time() - start < find_timeout:
+        try:
+            xml_text = dump_ui(adb)
+            xml_root = parse_xml(xml_text)
+
+            button_node = find_last_7_days_button(xml_root)
+
+            if button_node is not None:
+                break
+
+        except AdbError as exc:
+            print(f"WARNING: UI dump failed while looking for Last 7 Days: {exc}")
+
+        time.sleep(1.0)
+
+    if button_node is None:
+        print("WARNING: Last 7 Days button was not found.")
+        return False
+
+    bounds = button_node.attrib.get("bounds", "")
+    x, y = get_center_from_bounds(bounds)
+
+    if x is None or y is None:
+        print("WARNING: Found Last 7 Days button but could not read its bounds.")
+        return False
+
+    visible_text = button_node.attrib.get("text", "") or button_node.attrib.get("content-desc", "")
+    resource_id = button_node.attrib.get("resource-id", "")
+
+    print(f"Found Last 7 Days button: text='{visible_text}' id='{resource_id}' bounds='{bounds}'")
+    print(f"Tapping Last 7 Days EXACTLY ONCE at {x},{y}...")
+
+    try:
+        adb.run(["shell", "input", "tap", str(x), str(y)], timeout=5)
+        print("Last 7 Days tapped once.")
+        return True
+    except AdbError as exc:
+        print(f"WARNING: Failed to tap Last 7 Days button: {exc}")
+        return False
+
 def run_auto_login():
     print("Reading password file...")
     password = read_password()
@@ -896,27 +1067,7 @@ def run_auto_login():
     print(f"Found password field. Tapping at {x},{y}...")
     adb.run(["shell", "input", "tap", str(x), str(y)], timeout=5)
 
-    # Wait for keyboard to appear (poll instead of fixed sleep).
-    print("Waiting for keyboard to appear...")
-
-    def _keyboard_visible(xml_text):
-        root = parse_xml(xml_text)
-        if root is None:
-            return False
-        keyboard_packages = ("inputmethod", "keyboard", "latin", "gboard", "swiftkey",
-                             "facemoji", "miui.inputmethod")
-        for node in root.iter("node"):
-            pkg = node.attrib.get("package", "").lower()
-            if any(kw in pkg for kw in keyboard_packages):
-                return True
-        return False
-
-    keyboard_appeared = wait_for_ui_element(adb, _keyboard_visible, timeout=5.0, poll_interval=0.5)
-
-    if not keyboard_appeared:
-        print("WARNING: Keyboard not detected. Proceeding to check language anyway...")
-
-    # 4. Check keyboard language.
+    # 4. Immediately check keyboard language.
     try:
         keyboard_xml_text = dump_ui(adb)
         keyboard_xml_root = parse_xml(keyboard_xml_text)
@@ -979,17 +1130,19 @@ def run_auto_login():
         print(f"FATAL: Login tap failed: {exc}")
         sys.exit(1)
 
-    # 7. Handle Welcome Popup instead of immediate termination.
+    # 7. Immediately check for a welcome popup once. No waiting.
     # The safeguard against double-tapping LOGIN is still intact because we don't tap login again.
-    print("Login tap sent. Waiting for next screen and checking for welcome popup...")
+    print("Login tap sent. Checking for welcome popup...")
     detect_and_close_welcome_message(adb)
 
-    # 8. Wait for loading overlay to disappear before proceeding to home screen.
-    print("Waiting for loading overlay to disappear...")
-    wait_for_loading_overlay_to_disappear(adb)
-
-      # Wait for Account Summary button, tap it once, then wait for activity change.
+    # 8. Immediately look for Account Summary button, tap it once, then wait for activity change.
     press_account_summary_and_wait(adb)
+
+    # 9. On the Account Summary page, tap View Statement / عرض تفاصيل الحساب exactly once.
+    press_view_statement_once(adb)
+
+    # 10. Wait for the statement screen, then tap Last 7 Days / آخر 7 أيام exactly once.
+    press_last_7_days_once(adb)
 
     print("Automation finished successfully.")
     sys.exit(0)
