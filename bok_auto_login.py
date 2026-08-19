@@ -981,6 +981,10 @@ def press_last_7_days_once(adb, find_timeout=15.0):
         print(f"WARNING: Failed to tap Last 7 Days button: {exc}")
         return False
 
+
+from collect_credit_transfers import collect_credit_transfers
+
+
 def run_auto_login():
     print("Reading password file...")
     password = read_password()
@@ -1143,6 +1147,9 @@ def run_auto_login():
 
     # 10. Wait for the statement screen, then tap Last 7 Days / آخر 7 أيام exactly once.
     press_last_7_days_once(adb)
+
+    # 11. Scroll through the statement list and collect credit transfers (up to 15).
+    collect_credit_transfers(adb)
 
     print("Automation finished successfully.")
     sys.exit(0)
